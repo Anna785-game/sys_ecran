@@ -1,0 +1,180 @@
+:root {
+  --bg: #0b0d10;
+  --bg-panel: #14171b;
+  --border-solid: #2a2f36;
+  --text: #f3f4f5;
+  --text-dim: #8b9198;
+  --green: #35d07f;
+  --amber: #f5a623;
+  --red: #ef4444;
+  --blue: #4f9dff;
+}
+* {
+  box-sizing: border-box;
+}
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  overflow: hidden;
+}
+.ecran-kiosque {
+  width: 100vw;
+  height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+}
+/* --- Veille --------------------------------------------------------- */
+.carre-idle {
+  width: min(60vw, 60vh);
+  height: min(60vw, 60vh);
+  position: relative;
+  opacity: 0.35;
+}
+.carre-idle-coin {
+  position: absolute;
+  width: 15%;
+  height: 15%;
+  border: 4px solid var(--text-dim);
+}
+.haut-gauche {
+  top: 0;
+  left: 0;
+  border-right: none;
+  border-bottom: none;
+}
+.haut-droit {
+  top: 0;
+  right: 0;
+  border-left: none;
+  border-bottom: none;
+}
+.bas-gauche {
+  bottom: 0;
+  left: 0;
+  border-right: none;
+  border-top: none;
+}
+.bas-droit {
+  bottom: 0;
+  right: 0;
+  border-left: none;
+  border-top: none;
+}
+/* --- Mode actif (enrôlement / vérification) -------------------------- */
+.video-fond {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transform: scaleX(-1);
+}
+.overlay {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  text-align: center;
+  padding: 32px;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(to bottom, rgba(11, 13, 16, 0.55), rgba(11, 13, 16, 0.75));
+}
+.overlay h1 {
+  font-size: clamp(24px, 5vw, 42px);
+  margin: 0;
+}
+.sous-texte-ecran {
+  color: var(--text-dim);
+  font-size: clamp(14px, 2.2vw, 18px);
+}
+.erreur-ecran {
+  color: var(--red);
+}
+.resultat-succes {
+  color: var(--green);
+}
+.resultat-echec {
+  color: var(--red);
+}
+.compte-a-rebours {
+  width: clamp(90px, 18vw, 140px);
+  height: clamp(90px, 18vw, 140px);
+  border-radius: 50%;
+  border: 4px solid var(--blue);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: clamp(36px, 7vw, 56px);
+  font-weight: 700;
+}
+
+/* --- Repère de cadrage ------------------------------------------------ */
+/* Superposé au flux vidéo (déjà en miroir via .video-fond) pendant
+   l'attente et le décompte, pour que l'utilisateur sache s'il est bien
+   placé avant même que la photo soit prise. */
+.cadre-guide {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 34vh;
+  height: 44vh;
+  transform: translate(-50%, -50%);
+  border: 4px solid rgba(243, 244, 245, 0.5);
+  border-radius: 50% / 40%;
+  transition: border-color 150ms ease, box-shadow 150ms ease;
+  pointer-events: none;
+}
+.cadre-guide-ok {
+  border-color: var(--green);
+  box-shadow: 0 0 24px 2px rgba(53, 208, 127, 0.35);
+}
+
+/* --- Flash de capture --------------------------------------------------- */
+/* Déclenché au moment exact où la photo est prise, au-dessus de tout
+   (y compris le texte de l'overlay) pour être bien perçu. */
+.flash-capture {
+  position: absolute;
+  inset: 0;
+  background: var(--text);
+  opacity: 0.85;
+  z-index: 2;
+  animation: flash-fade 150ms ease-out forwards;
+  pointer-events: none;
+}
+@keyframes flash-fade {
+  from {
+    opacity: 0.85;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+/* --- Bouton réessayer --------------------------------------------------- */
+.bouton-reessayer {
+  margin-top: 8px;
+  padding: 12px 32px;
+  font-size: clamp(15px, 2.2vw, 18px);
+  font-weight: 600;
+  color: var(--bg);
+  background: var(--blue);
+  border: none;
+  border-radius: 999px;
+  cursor: pointer;
+}
+.bouton-reessayer:active {
+  opacity: 0.85;
+/* } */
