@@ -8,54 +8,35 @@ const FACE_API_BASE =
   import.meta.env.VITE_FACE_API_BASE || "https://XXXX.trycloudflare.com";
 const FACE_SECRET = import.meta.env.VITE_FACE_SECRET || "";
 
-// JWT admin Supabase pour les routes require_admin (enroll + liste candidats)
-const SERVICE_TOKEN = import.meta.env.VITE_SERVICE_TOKEN || "";
-
-async function appelJson(url, options = {}) {
-  const headers = {
-    "Content-Type": "application/json",
-    ...(options.headers || {}),
-  };
-  if (SERVICE_TOKEN && !headers.Authorization) {
-    headers.Authorization = `Bearer ${SERVICE_TOKEN}`;
-  }
-
-  const res = await fetch(url, { ...options, headers });
-  const data = await res.json().catch(() => null);
-  if (!res.ok) {
-    const erreur = new Error(
-      data?.erreur || data?.detail || `Erreur ${res.status}`
-    );
-    erreur.status = res.status;
-    erreur.data = data;
-    throw erreur;
-  }
-  return data;
-}
+// Secret statique dédié à l'écran (n'expire jamais, contrairement à un JWT
+// Supabase). Doit correspondre à ECRAN_SHARED_SECRET côté backend (Render).
+// Protège /candidats/ecran/tache-active et /api/biometrie/enroll.
+const ECRAN_SECRET = import.meta.env.VITE_ECRAN_SECRET || "";
 
 export const api = {
   /**
-   * Remplace l'ancien GET /ecran/tache-active (inexistant côté backend).
-   * Cherche un candidat statut === "actif" sans poste_attribue
-   * (= en attente d'enrôlement visage après acceptation admin).
-   * Nécessite VITE_SERVICE_TOKEN (JWT admin).
+   * GET /candidats/ecran/tache-active, protégé par X-Ecran-Secret.
+   * Remplace l'ancien polling sur /candidats (qui exigeait un JWT admin
+   * Supabase, expirant au bout d'1h — inadapté à un écran qui doit tourner
+   * en continu pendant toute l'expo).
    */
   tacheActive: async () => {
-    const liste = await appelJson(`${PRESENCE_API_BASE}/candidats`);
-    const actif = (liste || []).find(
-      (c) => c.statut === "actif" && c.employe_id && !c.poste_attribue
-    );
-    if (!actif) return null;
-    return {
-      candidatId: actif.id,
-      employeId: actif.employe_id,
-      nom: actif.nom,
-    };
+    const res = await fetch(`${PRESENCE_API_BASE}/candidats/ecran/tache-active`, {
+      headers: { "X-Ecran-Secret": ECRAN_SECRET },
+    });
+    const data = await res.json().catch(() => null);
+    if (!res.ok) {
+      const erreur = new Error(data?.detail || `Erreur ${res.status}`);
+      erreur.status = res.status;
+      throw erreur;
+    }
+    return data; // { candidatId, employeId, nom } ou null
   },
 
   /**
    * Enrôlement : photo → backend.
-   * POST /api/biometrie/enroll/{employe_id}  (require_admin)
+   * POST /api/biometrie/enroll/{employe_id}, protégé par X-Ecran-Secret
+   * (plus par require_admin — évite l'expiration du JWT en pleine expo).
    * Le serveur appelle face_server, stocke l'encoding, tire la roulette.
    */
   enrollVisage: async (employeId, blobPhoto) => {
@@ -66,9 +47,7 @@ export const api = {
       `${PRESENCE_API_BASE}/api/biometrie/enroll/${employeId}`,
       {
         method: "POST",
-        headers: SERVICE_TOKEN
-          ? { Authorization: `Bearer ${SERVICE_TOKEN}` }
-          : {},
+        headers: { "X-Ecran-Secret": ECRAN_SECRET },
         body: form,
       }
     );

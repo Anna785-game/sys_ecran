@@ -33,7 +33,7 @@ export function useDetectionVisage(actif) {
     async function demarrer() {
       try {
         flux = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: "environment" }, // caméra tournée vers le visiteur
+          video: { facingMode: { exact: "user" } }, // caméra frontale uniquement
           audio: false,
         });
         if (annule) {
@@ -46,7 +46,7 @@ export function useDetectionVisage(actif) {
           setPret(true);
         }
       } catch {
-        setErreur("Impossible d'accéder à la caméra de l'écran.");
+        setErreur("Impossible d'accéder à la caméra frontale de l'écran.");
       }
     }
     demarrer();
