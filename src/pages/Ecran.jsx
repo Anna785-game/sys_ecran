@@ -1,33 +1,74 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, verifierVisage } from "../api/api";
+import { verifierVisage } from "../api/api";
 import { useDetectionVisage } from "../hooks/useDetectionVisage";
 import { useLecteurCarte } from "../hooks/useLecteurCarte";
+import { useWsEcran } from "../hooks/useWsEcran";
 import CompteARebours from "../components/CompteARebours";
 import CarreIdle from "../components/CarreIdle";
+import "../styles/nouveautes.css";
 
-const INTERVALLE_POLL_MS = 2000;
 const DUREE_AFFICHAGE_SUCCES_MS = 3000;
 const DUREE_AVANT_ABANDON_ECHEC_MS = 15000;
 const DUREE_FLASH_MS = 150;
+const DUREE_BANNIERE_MS = 8000;
 
+// L'écran kiosque ne fait plus qu'une chose :
+//   carte + visage → entrée / sortie (/api/biometrie/verify).
+// L'enrôlement du visage et le choix du poste se font sur le téléphone
+// (systeme_presence_user). La remise de la carte physique se fait
+// côté admin (sys_admin → panneau Cartes).
+// Mode démo : event WS "scan_factice" simule un badge RFID.
+//
 // phase : "attente" | "compte" | "traitement" | "resultat"
+
 export default function Ecran() {
-  // enrolement : { mode, candidatId, employeId, nom }
-  // verification : { mode, uidcarte }
+  // verification : { uidcarte }
   const [tache, setTache] = useState(null);
   const [phase, setPhase] = useState("attente");
   const [resultat, setResultat] = useState(null);
   const [flashActif, setFlashActif] = useState(false);
+  const [banniere, setBanniere] = useState(null);
   const photoRef = useRef(null);
   const timeoutAbandonRef = useRef(null);
+  const bannierTimeoutRef = useRef(null);
   const audioCtxRef = useRef(null);
 
   const actif = tache !== null;
   const { videoRef, canvasRef, pret, visagePresent, erreur, capturerPhoto } =
     useDetectionVisage(actif);
 
-  // AudioContext créé une fois quand l'écran devient actif (évite les
-  // blocages autoplay et la recréation à chaque capture).
+  // Scan carte RFID (lecteur USB ou scan factice WS) → démarre une vérif.
+  // Déclaré AVANT useWsEcran pour que le handler scan_factice le voie.
+  const surScanCarte = useCallback((uid) => {
+    setTache((actuelle) => {
+      if (actuelle) return actuelle;
+      return { uidcarte: uid };
+    });
+  }, []);
+  useLecteurCarte(surScanCarte);
+
+  // Bannière + scan factice (mode démo téléphone).
+  useWsEcran((payload) => {
+    if (payload.event === "employe_actif" || payload.event === "carte_assignee") {
+      setBanniere(
+        payload.message ||
+          (payload.event === "carte_assignee"
+            ? "Une carte vient d'être remise."
+            : "Un(e) candidat(e) a terminé son parcours.")
+      );
+      clearTimeout(bannierTimeoutRef.current);
+      bannierTimeoutRef.current = setTimeout(
+        () => setBanniere(null),
+        DUREE_BANNIERE_MS
+      );
+    }
+
+    // Scan RFID simulé depuis le téléphone (carte factice)
+    if (payload.event === "scan_factice" && payload.uidcarte) {
+      surScanCarte(payload.uidcarte);
+    }
+  });
+
   useEffect(() => {
     if (!actif) return;
     if (!audioCtxRef.current) {
@@ -59,49 +100,12 @@ export default function Ecran() {
     }
   }
 
-  // Polling : y a-t-il un candidat actif sans poste (en attente d'enrôlement) ?
-  // Coupé tant qu'une tâche est déjà en cours.
+  // Visage détecté → démarre le compte à rebours.
   useEffect(() => {
-    if (tache) return;
-    let annule = false;
-
-    async function verifier() {
-      try {
-        const t = await api.tacheActive();
-        if (!annule && t) {
-          setTache({
-            mode: "enrolement",
-            candidatId: t.candidatId,
-            employeId: t.employeId,
-            nom: t.nom,
-          });
-          setPhase("attente");
-        }
-      } catch {
-        // Serveur injoignable : l'écran reste en veille.
-      }
-    }
-
-    verifier();
-    const id = setInterval(verifier, INTERVALLE_POLL_MS);
-    return () => {
-      annule = true;
-      clearInterval(id);
-    };
-  }, [tache]);
-
-  // Scan carte RFID → mode vérification (sauf si une tâche tourne déjà).
-  const surScanCarte = useCallback((uid) => {
-    setTache((actuelle) => actuelle ?? { mode: "verification", uidcarte: uid });
-  }, []);
-  useLecteurCarte(surScanCarte);
-
-  // Visage détecté dans le cadre → démarre le compte à rebours.
-  useEffect(() => {
-    if (actif && phase === "attente" && visagePresent) {
+    if (tache && phase === "attente" && visagePresent) {
       setPhase("compte");
     }
-  }, [actif, phase, visagePresent]);
+  }, [tache, phase, visagePresent]);
 
   async function surCapture() {
     setFlashActif(true);
@@ -122,27 +126,16 @@ export default function Ecran() {
         throw new Error("Aucune photo n'a pu être prise, réessayez.");
       }
 
-      if (tache.mode === "enrolement") {
-        // Photo → backend /api/biometrie/enroll/{employe_id}
-        // (le serveur appelle face_server, stocke l'encoding, tire la roulette)
-        if (!tache.employeId) {
-          throw new Error("Aucun employé lié à ce candidat.");
-        }
-        await api.enrollVisage(tache.employeId, photoRef.current);
-        setResultat({ succes: true, message: "Visage enregistré avec succès." });
-      } else {
-        // Carte + visage → /api/biometrie/verify
-        const reponse = await verifierVisage(tache.uidcarte, photoRef.current);
-        const autorise = reponse.result === "AUTHORIZED";
-        setResultat({
-          succes: autorise,
-          message: autorise
-            ? `Bienvenue ${reponse.nom} — ${
-                reponse.action === "entree" ? "entrée" : "sortie"
-              } enregistrée.`
-            : "Visage non reconnu.",
-        });
-      }
+      const reponse = await verifierVisage(tache.uidcarte, photoRef.current);
+      const autorise = reponse.result === "AUTHORIZED";
+      setResultat({
+        succes: autorise,
+        message: autorise
+          ? `Bienvenue ${reponse.nom} — ${
+              reponse.action === "entree" ? "entrée" : "sortie"
+            } enregistrée.`
+          : "Visage non reconnu.",
+      });
     } catch (e) {
       setResultat({ succes: false, message: messageErreurLisible(e) });
     } finally {
@@ -151,7 +144,7 @@ export default function Ecran() {
     }
   }
 
-  // Succès → retour veille auto ; échec → bouton Réessayer + timeout de sécurité.
+  // Succès → retour veille auto ; échec → bouton Réessayer + timeout.
   useEffect(() => {
     if (phase !== "resultat" || !resultat) return;
 
@@ -175,13 +168,14 @@ export default function Ecran() {
   function reessayer() {
     clearTimeout(timeoutAbandonRef.current);
     setResultat(null);
-    setPhase("attente"); // on garde `tache` (pas besoin de rescanner / re-sélectionner)
+    setPhase("attente"); // on garde `tache` (pas besoin de rescanner)
   }
 
   if (!actif) {
     return (
       <div className="ecran-kiosque inactif">
         <CarreIdle />
+        {banniere && <div className="banniere-felicitation">{banniere}</div>}
       </div>
     );
   }
@@ -195,18 +189,18 @@ export default function Ecran() {
 
       <div className="overlay">
         {(phase === "attente" || phase === "compte") && (
-          <div className={`cadre-guide ${visagePresent ? "cadre-guide-ok" : ""}`} />
+          <div
+            className={`cadre-guide ${visagePresent ? "cadre-guide-ok" : ""}`}
+          />
         )}
 
         {phase === "attente" && (
           <>
-            <h1>
-              {tache.mode === "enrolement"
-                ? `Veuillez enregistrer votre visage, ${tache.nom}`
-                : "Veuillez vous placer devant l'écran"}
-            </h1>
+            <h1>Veuillez vous placer devant l&apos;écran</h1>
             <p className="sous-texte-ecran">
-              {pret ? "Placez votre visage dans le cadre." : "Activation de la caméra..."}
+              {pret
+                ? "Placez votre visage dans le cadre."
+                : "Activation de la caméra..."}
             </p>
             {erreur && <p className="erreur-ecran">{erreur}</p>}
           </>
@@ -223,11 +217,19 @@ export default function Ecran() {
 
         {phase === "resultat" && (
           <>
-            <h1 className={resultat.succes ? "resultat-succes" : "resultat-echec"}>
+            <h1
+              className={
+                resultat.succes ? "resultat-succes" : "resultat-echec"
+              }
+            >
               {resultat.message}
             </h1>
             {!resultat.succes && (
-              <button type="button" className="bouton-reessayer" onClick={reessayer}>
+              <button
+                type="button"
+                className="bouton-reessayer"
+                onClick={reessayer}
+              >
                 Réessayer
               </button>
             )}

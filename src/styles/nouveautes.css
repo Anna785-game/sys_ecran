@@ -1,0 +1,47 @@
+/*
+ * Styles ajoutés pour la nouvelle répartition des rôles de l'écran :
+ * l'enrôlement du visage se fait sur le téléphone, cet écran ne gère plus
+ * que la vérification (entrée/sortie) et l'attribution de la carte
+ * physique. Fichier séparé de global.css pour ne pas risquer d'écraser
+ * des classes déjà définies là-bas.
+ */
+
+.overlay-centre {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 20px;
+  text-align: center;
+  padding: 32px;
+}
+
+.banniere-felicitation {
+  position: fixed;
+  left: 50%;
+  bottom: 48px;
+  transform: translateX(-50%);
+  max-width: 80vw;
+  padding: 18px 28px;
+  border-radius: 14px;
+  background: rgba(20, 20, 20, 0.85);
+  border: 1px solid rgba(120, 220, 170, 0.6);
+  color: #eafff3;
+  font-size: 1.1rem;
+  text-align: center;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+  animation: apparition-banniere 0.3s ease-out;
+}
+
+@keyframes apparition-banniere {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 12px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
