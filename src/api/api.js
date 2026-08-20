@@ -7,13 +7,15 @@ const FACE_API_BASE =
   import.meta.env.VITE_FACE_API_BASE || "https://XXXX.trycloudflare.com";
 const FACE_SECRET = import.meta.env.VITE_FACE_SECRET || "";
 
-// Secret écran (WebSocket bannières). Doit correspondre à ECRAN_SHARED_SECRET.
+// Secret écran (WebSocket bannières + enroll dépannage). Doit correspondre
+// à ECRAN_SHARED_SECRET côté serveur.
 const ECRAN_SECRET = import.meta.env.VITE_ECRAN_SECRET || "";
 
 /**
  * URL du websocket écran (mêmes événements que /ws/admin), authentifié
  * par le secret écran. Sert à afficher une bannière quand un candidat
- * choisit son poste ou reçoit sa carte côté admin.
+ * choisit son poste ou reçoit sa carte côté admin, et à recevoir une
+ * demande d'enrôlement quand le téléphone du candidat n'a pas de caméra.
  */
 export function wsEcranUrl() {
   const httpBase = PRESENCE_API_BASE.replace(/\/+$/, "");
@@ -67,4 +69,33 @@ export async function verifierVisage(uidcarte, blobPhoto, seuil) {
   return data; // { result: "AUTHORIZED" | "DENIED", ... }
 }
 
-export { PRESENCE_API_BASE, FACE_API_BASE };
+/**
+ * Enrôlement depuis l'écran kiosque (secours quand le téléphone ne peut pas).
+ * POST /api/biometrie/enroll/{employe_id} avec secret écran.
+ */
+export async function enrolerVisageEcran(employeId, blobPhoto) {
+  const form = new FormData();
+  form.append("photo", blobPhoto, "photo.jpg");
+
+  const res = await fetch(
+    `${PRESENCE_API_BASE}/api/biometrie/enroll/${encodeURIComponent(employeId)}`,
+    {
+      method: "POST",
+      headers: { "X-Ecran-Secret": ECRAN_SECRET },
+      body: form,
+    }
+  );
+  const data = await res.json().catch(() => null);
+  if (!res.ok) {
+    const erreur = new Error(
+      (typeof data?.detail === "string" ? data.detail : null) ||
+        data?.erreur ||
+        `Erreur ${res.status}`
+    );
+    erreur.status = res.status;
+    throw erreur;
+  }
+  return data;
+}
+
+export { PRESENCE_API_BASE, FACE_API_BASE, ECRAN_SECRET };

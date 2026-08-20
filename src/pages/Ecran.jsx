@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { verifierVisage } from "../api/api";
+import { verifierVisage, enrolerVisageEcran } from "../api/api";
 import { useDetectionVisage } from "../hooks/useDetectionVisage";
 import { useLecteurCarte } from "../hooks/useLecteurCarte";
 import { useWsEcran } from "../hooks/useWsEcran";
@@ -11,19 +11,18 @@ const DUREE_AFFICHAGE_SUCCES_MS = 3000;
 const DUREE_AVANT_ABANDON_ECHEC_MS = 15000;
 const DUREE_FLASH_MS = 150;
 const DUREE_BANNIERE_MS = 8000;
+const DUREE_ENROLEMENT_TIMEOUT_MS = 90000; // abandon auto si personne ne se présente
 
-// L'écran kiosque ne fait plus qu'une chose :
-//   carte + visage → entrée / sortie (/api/biometrie/verify).
-// L'enrôlement du visage et le choix du poste se font sur le téléphone
-// (systeme_presence_user). La remise de la carte physique se fait
-// côté admin (sys_admin → panneau Cartes).
-// Mode démo : event WS "scan_factice" simule un badge RFID.
+// Modes :
+//   - veille (tache null, pas d'enrôlement)
+//   - vérification carte+visage (tache = { uidcarte })
+//   - enrôlement secours téléphone (enrolement = { employe_id, nom })
 //
-// phase : "attente" | "compte" | "traitement" | "resultat"
+// phase (partagée) : "attente" | "compte" | "traitement" | "resultat"
 
 export default function Ecran() {
-  // verification : { uidcarte }
-  const [tache, setTache] = useState(null);
+  const [tache, setTache] = useState(null); // { uidcarte } vérification
+  const [enrolement, setEnrolement] = useState(null); // { employe_id, nom, candidat_id? }
   const [phase, setPhase] = useState("attente");
   const [resultat, setResultat] = useState(null);
   const [flashActif, setFlashActif] = useState(false);
@@ -31,23 +30,26 @@ export default function Ecran() {
   const photoRef = useRef(null);
   const timeoutAbandonRef = useRef(null);
   const bannierTimeoutRef = useRef(null);
+  const enrollTimeoutRef = useRef(null);
   const audioCtxRef = useRef(null);
 
-  const actif = tache !== null;
+  const actif = tache !== null || enrolement !== null;
   const { videoRef, canvasRef, pret, visagePresent, erreur, capturerPhoto } =
     useDetectionVisage(actif);
 
-  // Scan carte RFID (lecteur USB ou scan factice WS) → démarre une vérif.
-  // Déclaré AVANT useWsEcran pour que le handler scan_factice le voie.
   const surScanCarte = useCallback((uid) => {
-    setTache((actuelle) => {
-      if (actuelle) return actuelle;
-      return { uidcarte: uid };
+    // Pendant un enrôlement en cours, on ignore les scans carte
+    setEnrolement((enr) => {
+      if (enr) return enr;
+      setTache((actuelle) => {
+        if (actuelle) return actuelle;
+        return { uidcarte: uid };
+      });
+      return null;
     });
   }, []);
   useLecteurCarte(surScanCarte);
 
-  // Bannière + scan factice (mode démo téléphone).
   useWsEcran((payload) => {
     if (payload.event === "employe_actif" || payload.event === "carte_assignee") {
       setBanniere(
@@ -63,9 +65,39 @@ export default function Ecran() {
       );
     }
 
-    // Scan RFID simulé depuis le téléphone (carte factice)
     if (payload.event === "scan_factice" && payload.uidcarte) {
       surScanCarte(payload.uidcarte);
+    }
+
+    // Demande d'enrôlement depuis le téléphone (caméra bloquée)
+    if (payload.event === "enrolement_ecran_demande" && payload.employe_id) {
+      setTache(null); // priorité à l'enrôlement
+      setResultat(null);
+      setPhase("attente");
+      setEnrolement({
+        employe_id: payload.employe_id,
+        nom: payload.candidat?.nom || "le candidat",
+        candidat_id: payload.candidat?.id,
+      });
+      clearTimeout(enrollTimeoutRef.current);
+      enrollTimeoutRef.current = setTimeout(() => {
+        setEnrolement(null);
+        setPhase("attente");
+        setResultat(null);
+      }, DUREE_ENROLEMENT_TIMEOUT_MS);
+    }
+
+    // Si le visage a été enrôlé ailleurs pendant qu'on attendait, on ferme
+    if (payload.event === "visage_enrole" && enrolement) {
+      if (
+        payload.employe_id === enrolement.employe_id ||
+        payload.candidat?.id === enrolement.candidat_id
+      ) {
+        clearTimeout(enrollTimeoutRef.current);
+        setEnrolement(null);
+        setPhase("attente");
+        setResultat(null);
+      }
     }
   });
 
@@ -100,12 +132,12 @@ export default function Ecran() {
     }
   }
 
-  // Visage détecté → démarre le compte à rebours.
+  // Visage détecté → démarre le compte à rebours (vérif ou enrôlement).
   useEffect(() => {
-    if (tache && phase === "attente" && visagePresent) {
+    if ((tache || enrolement) && phase === "attente" && visagePresent) {
       setPhase("compte");
     }
-  }, [tache, phase, visagePresent]);
+  }, [tache, enrolement, phase, visagePresent]);
 
   async function surCapture() {
     setFlashActif(true);
@@ -126,16 +158,25 @@ export default function Ecran() {
         throw new Error("Aucune photo n'a pu être prise, réessayez.");
       }
 
-      const reponse = await verifierVisage(tache.uidcarte, photoRef.current);
-      const autorise = reponse.result === "AUTHORIZED";
-      setResultat({
-        succes: autorise,
-        message: autorise
-          ? `Bienvenue ${reponse.nom} — ${
-              reponse.action === "entree" ? "entrée" : "sortie"
-            } enregistrée.`
-          : "Visage non reconnu.",
-      });
+      if (enrolement) {
+        await enrolerVisageEcran(enrolement.employe_id, photoRef.current);
+        setResultat({
+          succes: true,
+          message: `Visage enregistré pour ${enrolement.nom}. Vous pouvez choisir votre poste sur votre téléphone.`,
+        });
+        clearTimeout(enrollTimeoutRef.current);
+      } else {
+        const reponse = await verifierVisage(tache.uidcarte, photoRef.current);
+        const autorise = reponse.result === "AUTHORIZED";
+        setResultat({
+          succes: autorise,
+          message: autorise
+            ? `Bienvenue ${reponse.nom} — ${
+                reponse.action === "entree" ? "entrée" : "sortie"
+              } enregistrée.`
+            : "Visage non reconnu.",
+        });
+      }
     } catch (e) {
       setResultat({ succes: false, message: messageErreurLisible(e) });
     } finally {
@@ -151,6 +192,7 @@ export default function Ecran() {
     if (resultat.succes) {
       const id = setTimeout(() => {
         setTache(null);
+        setEnrolement(null);
         setPhase("attente");
         setResultat(null);
       }, DUREE_AFFICHAGE_SUCCES_MS);
@@ -159,6 +201,7 @@ export default function Ecran() {
 
     timeoutAbandonRef.current = setTimeout(() => {
       setTache(null);
+      setEnrolement(null);
       setPhase("attente");
       setResultat(null);
     }, DUREE_AVANT_ABANDON_ECHEC_MS);
@@ -168,7 +211,16 @@ export default function Ecran() {
   function reessayer() {
     clearTimeout(timeoutAbandonRef.current);
     setResultat(null);
-    setPhase("attente"); // on garde `tache` (pas besoin de rescanner)
+    setPhase("attente"); // on garde tache ou enrolement
+  }
+
+  function annulerEnrolement() {
+    clearTimeout(enrollTimeoutRef.current);
+    clearTimeout(timeoutAbandonRef.current);
+    setEnrolement(null);
+    setTache(null);
+    setPhase("attente");
+    setResultat(null);
   }
 
   if (!actif) {
@@ -180,8 +232,19 @@ export default function Ecran() {
     );
   }
 
+  const titreAttente = enrolement
+    ? `Pour ${enrolement.nom} seulement`
+    : "Veuillez vous placer devant l'écran";
+  const sousAttente = enrolement
+    ? pret
+      ? "Placez votre visage dans le cadre pour enregistrer votre identité."
+      : "Activation de la caméra..."
+    : pret
+      ? "Placez votre visage dans le cadre."
+      : "Activation de la caméra...";
+
   return (
-    <div className="ecran-kiosque actif">
+    <div className={`ecran-kiosque actif ${enrolement ? "mode-enrolement" : ""}`}>
       <video ref={videoRef} muted playsInline className="video-fond" />
       <canvas ref={canvasRef} style={{ display: "none" }} />
 
@@ -196,24 +259,43 @@ export default function Ecran() {
 
         {phase === "attente" && (
           <>
-            <h1>Veuillez vous placer devant l&apos;écran</h1>
-            <p className="sous-texte-ecran">
-              {pret
-                ? "Placez votre visage dans le cadre."
-                : "Activation de la caméra..."}
-            </p>
+            <h1>{titreAttente}</h1>
+            <p className="sous-texte-ecran">{sousAttente}</p>
+            {enrolement && (
+              <p className="sous-texte-ecran" style={{ opacity: 0.75, marginTop: 8 }}>
+                Enrôlement demandé depuis le téléphone — carte non requise.
+              </p>
+            )}
             {erreur && <p className="erreur-ecran">{erreur}</p>}
+            {enrolement && (
+              <button
+                type="button"
+                className="bouton-reessayer"
+                onClick={annulerEnrolement}
+                style={{ marginTop: 16 }}
+              >
+                Annuler
+              </button>
+            )}
           </>
         )}
 
         {phase === "compte" && (
           <>
-            <h1>Ne bougez plus...</h1>
+            <h1>
+              {enrolement
+                ? `Ne bougez plus, ${enrolement.nom}…`
+                : "Ne bougez plus..."}
+            </h1>
             <CompteARebours onCapture={surCapture} onTermine={surFinCompte} />
           </>
         )}
 
-        {phase === "traitement" && <h1>Analyse en cours...</h1>}
+        {phase === "traitement" && (
+          <h1>
+            {enrolement ? "Enregistrement du visage…" : "Analyse en cours..."}
+          </h1>
+        )}
 
         {phase === "resultat" && (
           <>
@@ -251,8 +333,8 @@ function messageErreurLisible(e) {
   if (/503|indisponible|hors ligne/i.test(brut)) {
     return "Service de reconnaissance indisponible. Réessayez dans un instant.";
   }
-  if (/401|403|token|autoris/i.test(brut)) {
-    return "Configuration kiosque incomplète (token admin). Contactez la régie.";
+  if (/401|403|token|autoris|secret/i.test(brut)) {
+    return "Configuration kiosque incomplète (secret écran). Contactez la régie.";
   }
   return "La photo n'a pas pu être analysée (lumière, flou...). Réessayez.";
 }
