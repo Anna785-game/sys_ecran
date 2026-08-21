@@ -146,11 +146,17 @@ export default function Ecran() {
     }
   }
 
-  // Visage détecté → démarre le compte à rebours (vérif ou enrôlement).
+  
+    // Visage détecté → démarre le compte à rebours, mais seulement après un court délai
+  // pour laisser le temps d'appuyer sur « Je suis prêt » (surtout en enrôlement).
   useEffect(() => {
-    if ((tache || enrolement) && phase === "attente" && visagePresent) {
-      setPhase("compte");
-    }
+    if (!(tache || enrolement) || phase !== "attente" || !visagePresent) return;
+
+    const delai = setTimeout(() => {
+      setPhase((p) => (p === "attente" ? "compte" : p));
+    }, 1500); // 1,5 s de marge
+
+    return () => clearTimeout(delai);
   }, [tache, enrolement, phase, visagePresent]);
 
   async function surCapture() {

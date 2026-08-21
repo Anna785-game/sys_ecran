@@ -1,7 +1,7 @@
 PROJECT DUMP
 ================================================================================
 Projet : sys_ecran
-Généré le : 2026-08-21 16:22:40
+Généré le : 2026-08-21 19:33:59
 Fichiers inclus : 10
 ================================================================================
 
@@ -183,9 +183,8 @@ export default function CarreIdle() {
 --------------------------------------------------------------------------------
 import { useEffect, useRef, useState } from "react";
 
-const DUREE_MS = 5000;
-// La photo est prise pendant le compte à rebours, mais pas tout à la fin :
-// à 2s écoulées, il reste encore 3s à décompter à l'écran.
+const DUREE_MS = 7000; // 7 secondes
+// Photo prise à 2 s, il reste 5 s à l'écran
 const DELAI_CAPTURE_MS = 2000;
 
 export default function CompteARebours({ onCapture, onTermine }) {
@@ -250,6 +249,7 @@ export function useDetectionVisage(actif) {
     if (!actif) {
       setPret(false);
       setVisagePresent(false);
+      setErreur(null);
       return;
     }
 
@@ -259,7 +259,11 @@ export function useDetectionVisage(actif) {
     async function demarrer() {
       try {
         flux = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: { exact: "user" } }, // caméra frontale uniquement
+          video: {
+            facingMode: "user", // plus de { exact: "user" } → beaucoup plus fiable
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
+          },
           audio: false,
         });
         if (annule) {
@@ -270,9 +274,13 @@ export function useDetectionVisage(actif) {
           videoRef.current.srcObject = flux;
           await videoRef.current.play();
           setPret(true);
+          setErreur(null);
         }
-      } catch {
-        setErreur("Impossible d'accéder à la caméra frontale de l'écran.");
+      } catch (e) {
+        setErreur(
+          "Impossible d'accéder à la caméra frontale de l'écran. Vérifiez les autorisations."
+        );
+        setPret(false);
       }
     }
     demarrer();
@@ -290,7 +298,9 @@ export function useDetectionVisage(actif) {
     let annule = false;
     let timeoutId;
     const detecteurNatif =
-      "FaceDetector" in window ? new window.FaceDetector({ fastMode: true, maxDetectedFaces: 1 }) : null;
+      "FaceDetector" in window
+        ? new window.FaceDetector({ fastMode: true, maxDetectedFaces: 1 })
+        : null;
     let derniereImage = null;
 
     async function boucle() {
@@ -315,10 +325,9 @@ export function useDetectionVisage(actif) {
               for (let i = 0; i < image.length; i += 4) {
                 diff += Math.abs(image[i] - derniereImage[i]);
               }
-              // Peu de mouvement d'une image à l'autre => quelqu'un se tient
-              // posé devant l'écran (approximation, pas une vraie
-              // reconnaissance de visage).
-              if (!annule) setVisagePresent(diff > 15000 && diff < 150000);
+              // Seuils un peu plus souples
+              const present = diff > 8000 && diff < 220000;
+              if (!annule) setVisagePresent(present);
             }
             derniereImage = image;
           }
@@ -519,10 +528,10 @@ export default function Ecran() {
     // Pendant un enrôlement en cours, on ignore les scans carte
     setEnrolement((enr) => {
       if (enr) return enr;
-      setTache((actuelle) => {
-        if (actuelle) return actuelle;
-        return { uidcarte: uid };
-      });
+      // État propre à chaque nouveau scan
+      setPhase("attente");
+      setResultat(null);
+      setTache({ uidcarte: uid });
       return null;
     });
   }, []);
@@ -624,11 +633,17 @@ export default function Ecran() {
     }
   }
 
-  // Visage détecté → démarre le compte à rebours (vérif ou enrôlement).
+  
+    // Visage détecté → démarre le compte à rebours, mais seulement après un court délai
+  // pour laisser le temps d'appuyer sur « Je suis prêt » (surtout en enrôlement).
   useEffect(() => {
-    if ((tache || enrolement) && phase === "attente" && visagePresent) {
-      setPhase("compte");
-    }
+    if (!(tache || enrolement) || phase !== "attente" || !visagePresent) return;
+
+    const delai = setTimeout(() => {
+      setPhase((p) => (p === "attente" ? "compte" : p));
+    }, 1500); // 1,5 s de marge
+
+    return () => clearTimeout(delai);
   }, [tache, enrolement, phase, visagePresent]);
 
   async function surCapture() {
@@ -759,6 +774,23 @@ export default function Ecran() {
               </p>
             )}
             {erreur && <p className="erreur-ecran">{erreur}</p>}
+
+            {/* Bouton de secours — style sys_user */}
+            {pret && (
+              <button
+                type="button"
+                className="bouton-reessayer"
+                style={{
+                  marginTop: 24,
+                  padding: "14px 28px",
+                  fontSize: "1.1rem",
+                }}
+                onClick={() => setPhase("compte")}
+              >
+                Je suis prêt
+              </button>
+            )}
+
             {enrolement && (
               <button
                 type="button"
