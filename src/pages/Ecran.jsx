@@ -69,6 +69,20 @@ export default function Ecran() {
       surScanCarte(payload.uidcarte);
     }
 
+    // Badge porte physique (ESP32) → bannière + lancement auto de la vérif faciale
+    if (payload.event === "porte_carte_ok" && payload.uidcarte) {
+      setBanniere(
+        payload.message ||
+          `${payload.nom || "Employé"}, placez-vous devant l'écran.`
+      );
+      clearTimeout(bannierTimeoutRef.current);
+      bannierTimeoutRef.current = setTimeout(
+        () => setBanniere(null),
+        DUREE_BANNIERE_MS
+      );
+      surScanCarte(payload.uidcarte);
+    }
+
     // Demande d'enrôlement depuis le téléphone (caméra bloquée)
     if (payload.event === "enrolement_ecran_demande" && payload.employe_id) {
       setTache(null); // priorité à l'enrôlement
@@ -318,6 +332,9 @@ export default function Ecran() {
           </>
         )}
       </div>
+
+      {/* Bannière aussi visible pendant une vérif (badge porte) */}
+      {banniere && <div className="banniere-felicitation">{banniere}</div>}
     </div>
   );
 }
