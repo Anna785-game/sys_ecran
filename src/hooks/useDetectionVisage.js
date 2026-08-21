@@ -24,6 +24,7 @@ export function useDetectionVisage(actif) {
     if (!actif) {
       setPret(false);
       setVisagePresent(false);
+      setErreur(null);
       return;
     }
 
@@ -33,7 +34,11 @@ export function useDetectionVisage(actif) {
     async function demarrer() {
       try {
         flux = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: { exact: "user" } }, // caméra frontale uniquement
+          video: {
+            facingMode: "user", // plus de { exact: "user" } → beaucoup plus fiable
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
+          },
           audio: false,
         });
         if (annule) {
@@ -44,9 +49,13 @@ export function useDetectionVisage(actif) {
           videoRef.current.srcObject = flux;
           await videoRef.current.play();
           setPret(true);
+          setErreur(null);
         }
-      } catch {
-        setErreur("Impossible d'accéder à la caméra frontale de l'écran.");
+      } catch (e) {
+        setErreur(
+          "Impossible d'accéder à la caméra frontale de l'écran. Vérifiez les autorisations."
+        );
+        setPret(false);
       }
     }
     demarrer();
@@ -64,7 +73,9 @@ export function useDetectionVisage(actif) {
     let annule = false;
     let timeoutId;
     const detecteurNatif =
-      "FaceDetector" in window ? new window.FaceDetector({ fastMode: true, maxDetectedFaces: 1 }) : null;
+      "FaceDetector" in window
+        ? new window.FaceDetector({ fastMode: true, maxDetectedFaces: 1 })
+        : null;
     let derniereImage = null;
 
     async function boucle() {
@@ -89,10 +100,9 @@ export function useDetectionVisage(actif) {
               for (let i = 0; i < image.length; i += 4) {
                 diff += Math.abs(image[i] - derniereImage[i]);
               }
-              // Peu de mouvement d'une image à l'autre => quelqu'un se tient
-              // posé devant l'écran (approximation, pas une vraie
-              // reconnaissance de visage).
-              if (!annule) setVisagePresent(diff > 15000 && diff < 150000);
+              // Seuils un peu plus souples
+              const present = diff > 8000 && diff < 220000;
+              if (!annule) setVisagePresent(present);
             }
             derniereImage = image;
           }

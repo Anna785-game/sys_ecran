@@ -41,10 +41,10 @@ export default function Ecran() {
     // Pendant un enrôlement en cours, on ignore les scans carte
     setEnrolement((enr) => {
       if (enr) return enr;
-      setTache((actuelle) => {
-        if (actuelle) return actuelle;
-        return { uidcarte: uid };
-      });
+      // État propre à chaque nouveau scan
+      setPhase("attente");
+      setResultat(null);
+      setTache({ uidcarte: uid });
       return null;
     });
   }, []);
@@ -281,6 +281,23 @@ export default function Ecran() {
               </p>
             )}
             {erreur && <p className="erreur-ecran">{erreur}</p>}
+
+            {/* Bouton de secours — style sys_user */}
+            {pret && (
+              <button
+                type="button"
+                className="bouton-reessayer"
+                style={{
+                  marginTop: 24,
+                  padding: "14px 28px",
+                  fontSize: "1.1rem",
+                }}
+                onClick={() => setPhase("compte")}
+              >
+                Je suis prêt
+              </button>
+            )}
+
             {enrolement && (
               <button
                 type="button"
